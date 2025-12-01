@@ -15,40 +15,92 @@ let rows = [
   { id: 4, name: "소금", weight: 20, percent: 2, isFlour: false },
 ];
 
+// Compression Streams API 참고자료: 
+// https://gist.github.com/Explosion-Scratch/357c2eebd8254f8ea5548b0e6ac7a61b
+// https://stackoverflow.com/questions/49349960/
+
+const compressionFormat = "deflate-raw";
+const b64Options = {alphabet: "base64url"};
+
+async function compress(rows) {
+  // 데이터 최소화 (n:name, w:weight, p:percent, f:isFlour(1/0))
+  const minimized = rows.map((r) => ({
+    n: r.name,
+    w: formatNum(r.weight),
+    p: formatNum(r.percent),
+    f: r.isFlour ? 1 : 0,
+  }));
+
+  const jsonStr = JSON.stringify(minimized);
+
+  // 데이터 압축
+  const byteArray = new TextEncoder().encode(jsonStr);
+  const cstream = new CompressionStream(compressionFormat);
+  const writer = cstream.writable.getWriter();
+  writer.write(byteArray);
+  writer.close();
+
+  const buffer = await new Response(cstream.readable).bytes();
+
+  return buffer.toBase64(b64Options);
+}
+
+async function decompress(data) {
+  // 데이터 압축 해제
+  const buffer = Uint8Array.fromBase64(data, b64Options);
+  const dstream = new DecompressionStream(compressionFormat);
+  const writer = dstream.writable.getWriter();
+  writer.write(buffer);
+  writer.close();
+
+  const byteArray = await new Response(dstream.readable).bytes();
+  const decoded = new TextDecoder().decode(byteArray);
+
+  // 키 압축 해제 (n:name, w:weight, p:percent, f:isFlour)
+  const parsed = JSON.parse(decoded);
+
+  return parsed.map((r, index) => ({
+    id: index + 1,
+    name: r.n,
+    weight: parseFloat(r.w) || 0,
+    percent: parseFloat(r.p) || 0,
+    isFlour: r.f === 1,
+  }));
+}
+
+// 구버전 호환
+function decompress_old(data) {
+  const decoded = decodeURIComponent(escape(atob(data)));
+
+  // 키 압축 해제 (n:name, w:weight, p:percent, f:isFlour)
+  const parsed = JSON.parse(decoded);
+
+  return parsed.map((r, index) => ({
+    id: index + 1,
+    name: r.n,
+    weight: parseFloat(r.w) || 0,
+    percent: parseFloat(r.p) || 0,
+    isFlour: r.f === 1,
+  }));
+}
+
 // 초기화 및 URL 파라미터 로드
-window.addEventListener("DOMContentLoaded", () => {
+window.addEventListener("DOMContentLoaded", async () => {
   const urlParams = new URLSearchParams(window.location.search);
   const data = urlParams.get("data");
   if (data) {
     try {
-      // Base64 디코딩 (한글 깨짐 방지 처리)
-      // escape(atob(data))로 바이너리 스트링을 URI 컴포넌트 형태로 변환 후 decode
-      // TODO: escape가 꼭 필요한지 확인할 것 (Deprecated)
-      // TODO: gzip 등 기존 압축 알고리즘 검토
-      const decoded = decodeURIComponent(escape(atob(data)));
-      // 키 압축 해제 (n:name, w:weight, p:percent, f:isFlour)
-      const parsed = JSON.parse(decoded);
-      rows = parsed.map((r, index) => ({
-        id: index + 1,
-        name: r.n,
-        weight: parseFloat(r.w) || 0,
-        percent: parseFloat(r.p) || 0,
-        isFlour: r.f === 1,
-      }));
-    } catch (e) {
-      console.error("URL 데이터 로드 실패", e);
-      // 구버전 호환용 (혹시 모를 오류 대비)
+      rows = await decompress(data);
+    } catch (err) {
+      console.log(err);
+
+      // 구버전 호환
       try {
-        const decodedOld = atob(data);
-        const parsed = JSON.parse(decodedOld);
-        rows = parsed.map((r, index) => ({
-          id: index + 1,
-          name: r.n,
-          weight: parseFloat(r.w) || 0,
-          percent: parseFloat(r.p) || 0,
-          isFlour: r.f === 1,
-        }));
-      } catch (e2) {}
+        rows = decompress_old(data);
+      } catch (err) {
+        alert("데이터 로드에 실패했습니다.");
+        console.log(err);
+      }
     }
   }
   renderTable();
@@ -307,34 +359,24 @@ function focusCell(rIndex, cIndex) {
 }
 
 // URL 공유 기능 (압축하여 파라미터 저장)
-function updateUrl() {
-  // 데이터 최소화 (n:name, w:weight, p:percent, f:isFlour(1/0))
-  const minimized = rows.map((r) => ({
-    n: r.name,
-    w: formatNum(r.weight),
-    p: formatNum(r.percent),
-    f: r.isFlour ? 1 : 0,
-  }));
-
-  const jsonStr = JSON.stringify(minimized);
-  // 한글 깨짐 방지 위해 encodeURIComponent 후 btoa
-  const base64 = btoa(unescape(encodeURIComponent(jsonStr)));
+async function updateUrl() {
+  const base64 = await compress(rows);
 
   const newUrl = `${window.location.pathname}?data=${base64}`;
   window.history.replaceState(null, "", newUrl);
   return window.location.href;
 }
 
-function copyShareUrl() {
-  const url = updateUrl();
+async function copyShareUrl() {
+  const url = await updateUrl();
   navigator.clipboard
     .writeText(url)
     .then(() => showToast("URL이 복사되었습니다!"));
 }
 
 // Markdown 내보내기
-function exportMarkdown() {
-  const currentUrl = updateUrl(); // 최신 URL 갱신 및 가져오기
+async function exportMarkdown() {
+  const currentUrl = await updateUrl(); // 최신 URL 갱신 및 가져오기
 
   let md = `| 재료명 | 무게 (g) | 비율 (%) |\n| :--- | :---: | :---: |\n`;
   rows.forEach((r) => {
