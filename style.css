@@ -279,6 +279,17 @@ button.btn {
   opacity: 1;
 }
 
+/* Footer */
+footer {
+  text-align: center;
+  padding-top: 20px;
+}
+
+/* Open Source License */
+pre {
+  overflow-y: scroll;
+}
+
 @media (max-width: 600px) {
   .container {
     padding: 15px;
